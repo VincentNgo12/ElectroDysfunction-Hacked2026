@@ -15,10 +15,10 @@ PAN_PIN  = 18
 TILT_PIN = 19
 
 PAN_MIN,  PAN_MAX  = 0, 180
-TILT_MIN, TILT_MAX = 0, 135
+TILT_MIN, TILT_MAX = 0, 180
 
-HOME_PAN  = 90   # Centre position
-HOME_TILT = 90
+HOME_PAN  = 45   # Centre position
+HOME_TILT = 45
 
 MIN_PULSE = 0.0005
 MAX_PULSE = 0.0025
@@ -53,15 +53,15 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 def _set_pan(angle: float) -> None:
-    """Set pan servo to angle and update internal state."""
     global _current_pan
+    angle = _clamp(angle, PAN_MIN, PAN_MAX)
     pan.angle = angle
     _current_pan = angle
 
 
 def _set_tilt(angle: float) -> None:
-    """Set tilt servo to angle and update internal state."""
     global _current_tilt
+    angle = _clamp(angle, TILT_MIN, TILT_MAX)
     tilt.angle = angle
     _current_tilt = angle
 
@@ -225,25 +225,56 @@ def nod(tilt_up: float = 60, tilt_down: float = 120,
 
 # -- Search (combined pan + tilt sweep) -------------------------------------
 
-def search(blocking: bool = False):
+def search(face_detected_callback=None, blocking: bool = False):
     """
     Combined search pattern: scan left-right at three different tilt angles
-    to cover the full field of view. Useful when the target is completely lost.
+    to cover the full field of view. If no face is detected after a full
+    search, repeats up to 2 more times (3 total).
 
-    Interrupts immediately when stop_gesture() is called.
+    Parameters
+    ----------
+    face_detected_callback : callable  Function to call when a face is detected.
+                                       Should return True if a face is found,
+                                       False otherwise.
+    blocking               : bool      If True, block until gesture finishes.
     """
     def _search():
-        tilt_positions = [TILT_MIN, 90, TILT_MAX]   # top, middle, bottom
+        max_attempts = 3
 
-        for tilt_pos in tilt_positions:
+        for attempt in range(max_attempts):
             if _stop_event.is_set():
                 return
-            # Move tilt into position, then do a full pan sweep
-            if not move_to(PAN_MIN, tilt_pos, duration=0.5):
-                return
-            if not move_to(PAN_MAX, tilt_pos, duration=2.0):
-                return
 
+            tilt_positions = [45, 90, 135]
+
+            for i, tilt_pos in enumerate(tilt_positions):
+                print("bfr sleep")
+                sleep(5)
+                print("aft sleep")
+                if _stop_event.is_set():
+                    return
+
+                # Step 1: Move tilt to position while keeping pan where it is
+                if not move_to(_current_pan, tilt_pos, duration=0.5):
+                    return
+
+                # Step 2: Move pan back to PAN_MIN
+                if not move_to(PAN_MIN, tilt_pos, duration=1.5):
+                    return
+
+                # Step 3: Sweep pan from PAN_MIN to PAN_MAX at fixed tilt
+                if not move_to(PAN_MAX, tilt_pos, duration=2.0):
+                    return
+
+                # Check for face after each sweep
+                if face_detected_callback is not None:
+                    if face_detected_callback():
+                        stop_gesture()
+                        return
+
+            print(f"Search attempt {attempt + 1} of {max_attempts} complete, no face detected.")
+
+        print("No face detected after all attempts.")
         go_home()
 
     if blocking:
@@ -251,7 +282,6 @@ def search(blocking: bool = False):
         _search()
     else:
         return _run_gesture(_search)
-
 
 # ---------------------------------------------------------------------------
 # Status helpers
